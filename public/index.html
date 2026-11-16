@@ -1,0 +1,617 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>taiwan-infra-v10.1-intelligence｜台灣關鍵基建、電力海空運與空間情報系統</title>
+  <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+  <link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet" />
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Noto Sans TC", "Segoe UI", sans-serif; background: #f1f5f9; color: #1e293b; overflow: hidden; }
+    #map { width: 100vw; height: 100vh; }
+    .panel {
+      position: absolute; top: 12px; width: 315px; background: rgba(255, 255, 255, 0.96);
+      backdrop-filter: blur(10px); border-radius: 12px; padding: 13px 15px;
+      box-shadow: 0 10px 28px rgba(15, 23, 42, 0.14); font-size: 12.5px; color: #1e293b; z-index: 10;
+      max-height: calc(100vh - 56px); overflow-y: auto; border: 1px solid #e2e8f0;
+    }
+    #panel-infra { left: 12px; border-top: 4px solid #0284c7; }
+    #panel-osint { right: 12px; border-top: 4px solid #ef4444; }
+    .panel h3 { margin: 0 0 8px; font-size: 14px; display: flex; justify-content: space-between; align-items: center; color: #0f172a; }
+    .badge { font-size: 11px; padding: 2px 7px; border-radius: 999px; background: #e0f2fe; color: #0369a1; font-weight: 600; }
+    .badge-red { background: #fee2e2; color: #b91c1c; }
+    .section-title { font-size: 11px; font-weight: 700; color: #64748b; letter-spacing: 0.03em; margin: 10px 0 5px; display: flex; justify-content: space-between; }
+    .control-row { display: flex; align-items: center; justify-content: space-between; margin: 5px 0; }
+    .control-row label { cursor: pointer; display: flex; align-items: center; gap: 7px; font-size: 12px; color: #1e293b; }
+    .legend-dot { display: inline-block; width: 11px; height: 11px; border-radius: 3px; border: 1px solid #94a3b8; flex-shrink: 0; }
+    .legend-circle { display: inline-block; width: 10px; height: 10px; border-radius: 50%; border: 1.5px solid #fff; box-shadow: 0 0 0 1px #64748b; flex-shrink: 0; }
+    .line-swatch { display: inline-block; width: 18px; height: 3.5px; border-radius: 2px; flex-shrink: 0; }
+    .zoning-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 3px 6px; padding-left: 18px; font-size: 11px; color: #475569; margin-top: 4px; }
+    .zoning-item { display: flex; align-items: center; gap: 5px; }
+    .metric-strip { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 7px 9px; margin-bottom: 8px; font-size: 11px; }
+    .metric-val { font-weight: 700; color: #0f172a; font-size: 12.5px; }
+    .note-list { margin-top: 6px; border-top: 1px solid #e2e8f0; padding-top: 8px; max-height: 230px; overflow-y: auto; }
+    .note-card {
+      padding: 7px 9px; border-radius: 7px; background: #f8fafc; border: 1px solid #e2e8f0;
+      margin-bottom: 6px; cursor: pointer; transition: all 0.15s ease;
+    }
+    .note-card:hover { background: #eff6ff; border-color: #93c5fd; transform: translateY(-1px); }
+    .note-card-title { font-weight: 700; font-size: 11.5px; color: #0f172a; line-height: 1.35; }
+    .note-card-meta { font-size: 10.5px; color: #64748b; margin-top: 2px; }
+    .zoom-indicator {
+      position: absolute; bottom: 18px; left: 50%; transform: translateX(-50%);
+      background: rgba(255, 255, 255, 0.95); color: #0f172a; padding: 6px 16px;
+      border-radius: 20px; font-size: 12px; font-weight: 600; z-index: 10;
+      box-shadow: 0 4px 14px rgba(15, 23, 42, 0.12); border: 1px solid #cbd5e1;
+    }
+    .api-status { font-size: 11px; color: #059669; background: #ecfdf5; padding: 4px 8px; border-radius: 6px; margin-bottom: 8px; border: 1px solid #a7f3d0; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+
+  <!-- 左側獨立面板：台灣都計分區色彩基準、主要交通動脈、海空運與電力再生能源實測圖層 -->
+  <div id="panel-infra" class="panel">
+    <h3>🏗️ 台灣關鍵基建與分區圖層 <span class="badge">v10.1</span></h3>
+    <div id="api-status-box" class="api-status">🔄 正在連線交通、電力與海空運 API...</div>
+
+    <div class="metric-strip" id="infra-metrics">
+      <div>再生能源總裝置<div class="metric-val" id="m-renew">-- MW</div></div>
+      <div>超高壓/一次變電所<div class="metric-val" id="m-subs">-- 座</div></div>
+      <div>高鐵與軌道骨幹<div class="metric-val" id="m-rail">352.2 km</div></div>
+      <div>商港／工業港節點<div class="metric-val" id="m-ports">-- 處</div></div>
+    </div>
+
+    <div class="section-title">1. 土地使用分區色彩分層基準（低飽和 43%～53%）</div>
+    <div class="control-row">
+      <label><input type="checkbox" id="toggle-buildings" checked /> 2D 建物使用分區（Zoom ≥ 9.5 展開）</label>
+    </div>
+    <div class="zoning-grid">
+      <div class="zoning-item"><span class="legend-dot" style="background:#FDE047;"></span>住宅區 (45%)</div>
+      <div class="zoning-item"><span class="legend-dot" style="background:#FCA5A5;"></span>商業區 (50%)</div>
+      <div class="zoning-item"><span class="legend-dot" style="background:#FDBA74;"></span>住商混合 (50%)</div>
+      <div class="zoning-item"><span class="legend-dot" style="background:#D6B49C;"></span>工業科技 (53%)</div>
+      <div class="zoning-item"><span class="legend-dot" style="background:#93C5FD;"></span>行政文教 (50%)</div>
+      <div class="zoning-item"><span class="legend-dot" style="background:#86EFAC;"></span>公園綠地 (43%)</div>
+      <div class="zoning-item"><span class="legend-dot" style="background:#CBD5E1;"></span>交通水利 (45%)</div>
+    </div>
+
+    <hr style="border:none; border-top:1px solid #e2e8f0; margin:9px 0;" />
+
+    <div class="section-title">2. 主要陸路交通幹線（高鐵・國道・臺鐵）</div>
+    <div class="control-row">
+      <label><input type="checkbox" id="toggle-thsr" checked /> <span class="line-swatch" style="background:#ea580c;"></span>台灣高鐵全線實測曲線＋12站</label>
+    </div>
+    <div class="control-row">
+      <label><input type="checkbox" id="toggle-highways" checked /> <span class="line-swatch" style="background:#334155;"></span>國道 1/3/5/6 與台 61/64/68/74 快速路</label>
+    </div>
+    <div class="control-row">
+      <label><input type="checkbox" id="toggle-tra" /> <span class="line-swatch" style="background:#64748b; height:2px;"></span>臺鐵全線鐵路網（2,607 段）</label>
+    </div>
+
+    <hr style="border:none; border-top:1px solid #e2e8f0; margin:9px 0;" />
+
+    <div class="section-title">3. 海空運樞紐與聯外貨運走廊</div>
+    <div class="control-row">
+      <label><input type="checkbox" id="toggle-ports" checked /> <span class="legend-circle" style="background:#0284c7;"></span>商港／工業專用港（勾選含漁港）</label>
+      <label style="font-size:11px; color:#64748b;"><input type="checkbox" id="toggle-fishing-ports" /> 含漁港</label>
+    </div>
+    <div class="control-row">
+      <label><input type="checkbox" id="toggle-air-sea-corridors" checked /> <span class="line-swatch" style="background:#0ea5e9;"></span>航空城空運幹線與本島／離島機場</label>
+    </div>
+
+    <hr style="border:none; border-top:1px solid #e2e8f0; margin:9px 0;" />
+
+    <div class="section-title">4. 高壓電網與再生能源設施（實測圖資）</div>
+    <div class="control-row">
+      <label><input type="checkbox" id="toggle-power-grid" checked /> <span class="line-swatch" style="background:#dc2626;"></span>345kV / 161kV 輸電幹線與變電所</label>
+    </div>
+    <div class="control-row">
+      <label><input type="checkbox" id="toggle-renewables" checked /> <span class="legend-circle" style="background:#16a34a;"></span>太陽光電・離岸/陸域風電・地熱</label>
+    </div>
+  </div>
+
+  <!-- 右側獨立面板：多源語意情報、EveryNote 分層顯隱控制與報告匯出 -->
+  <div id="panel-osint" class="panel">
+    <h3>📡 空間情報與外溢帳本 <span class="badge badge-red">OSINT</span></h3>
+
+    <div class="section-title">情報註記（Every Note）分層顯隱控制</div>
+    <div class="control-row">
+      <label><input type="checkbox" id="toggle-all-notes" checked /> <b>👁️ 顯示全部情報註記（Every Note）</b></label>
+    </div>
+    <div class="control-row">
+      <label><input type="checkbox" id="toggle-heatmap" checked /> 顯示輿情熱力暈染底層</label>
+    </div>
+
+    <hr style="border:none; border-top:1px solid #e2e8f0; margin:9px 0;" />
+
+    <div class="section-title">三維帳本主題圖層（可分層隱藏／顯示註記）</div>
+    <div class="control-row">
+      <label><input type="checkbox" class="osint-filter" value="半導體與企業CapEx" checked /> <span class="legend-dot" style="background:#EF4444;"></span>半導體與企業 CapEx</label>
+    </div>
+    <div class="control-row">
+      <label><input type="checkbox" class="osint-filter" value="公共基建與水電能源" checked /> <span class="legend-dot" style="background:#3B82F6;"></span>公共基建與水電能源</label>
+    </div>
+    <div class="control-row">
+      <label><input type="checkbox" class="osint-filter" value="城市擴張與居住成本" checked /> <span class="legend-dot" style="background:#F59E0B;"></span>城市擴張與居住成本</label>
+    </div>
+    <div class="control-row">
+      <label><input type="checkbox" class="osint-filter" value="環境污染與生活品質" checked /> <span class="legend-dot" style="background:#10B981;"></span>環境污染與生活品質</label>
+    </div>
+
+    <div style="margin-top:7px;">
+      <select id="source-filter" style="width:100%; padding:6px; border-radius:6px; border:1px solid #cbd5e1; font-size:12px;">
+        <option value="ALL">全部來源（智庫 PDF + 新聞 + 政府公報）</option>
+        <option value="PDF實驗報告">PDF 智庫報告（CSIS / GTI）</option>
+        <option value="新聞RSS">國內外新聞 RSS（即時）</option>
+        <option value="政府公報">行政院政府公報（即時）</option>
+      </select>
+    </div>
+
+    <div class="section-title"><span>情報註記清單（點擊飛往節點）</span><span>共 <b id="note-count">0</b> 筆</span></div>
+    <div id="note-list" class="note-list"></div>
+
+    <a href="/api/report?format=md" target="_blank" style="display:block; text-align:center; background:#0f172a; color:#ffffff; text-decoration:none; padding:9px; border-radius:8px; font-weight:600; font-size:12px; margin-top:10px;">
+      📄 一鍵匯出本期空間分析報告 (.md)
+    </a>
+  </div>
+
+  <div id="zoom-mode" class="zoom-indicator">Zoom 7.6｜全島交通電網骨幹 ＋ 情報註記總覽</div>
+
+  <script>
+    const map = new maplibregl.Map({
+      container: 'map',
+      style: 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json',
+      center: [120.82, 23.82],
+      zoom: 7.6,
+      minZoom: 6,
+      maxZoom: 18
+    });
+
+    map.addControl(new maplibregl.NavigationControl(), 'bottom-left');
+
+    let allOsintData = { type: 'FeatureCollection', features: [] };
+
+    function renderNoteList(features) {
+      const container = document.getElementById('note-list');
+      document.getElementById('note-count').textContent = features.length;
+      container.innerHTML = features.map((f, idx) => {
+        const p = f.properties || {};
+        return `
+          <div class="note-card" data-idx="${idx}">
+            <div class="note-card-title" style="border-left: 3px solid ${p.marker_hex || '#ef4444'}; padding-left: 6px;">
+              ${p.short_note || p.title}
+            </div>
+            <div class="note-card-meta">${p.target_node} ｜ ${p.source_type}</div>
+          </div>
+        `;
+      }).join('');
+
+      container.querySelectorAll('.note-card').forEach(card => {
+        card.addEventListener('click', () => {
+          const feat = features[Number(card.dataset.idx)];
+          if (!feat) return;
+          const coords = feat.geometry.coordinates;
+          map.flyTo({ center: coords, zoom: 13.8, speed: 1.2 });
+          showOsintPopup(coords, feat.properties);
+        });
+      });
+    }
+
+    function showOsintPopup(lngLat, p) {
+      new maplibregl.Popup({ maxWidth: '320px', closeButton: true })
+        .setLngLat(lngLat)
+        .setHTML(`
+          <div style="font-size:13px; line-height:1.6; color:#0f172a;">
+            <span style="background:${p.marker_hex}; color:#fff; padding:2px 7px; border-radius:4px; font-size:11px; font-weight:600;">${p.topic_category}</span>
+            <span style="background:#f1f5f9; color:#334155; padding:2px 7px; border-radius:4px; font-size:11px; margin-left:4px; border:1px solid #cbd5e1;">${p.source_type}</span>
+            <div style="font-weight:700; font-size:14px; margin:8px 0 4px;">${p.title}</div>
+            <div style="background:#f8fafc; padding:6px 8px; border-radius:6px; margin-bottom:6px; font-size:12px;">
+              <div><b>帳本歸戶：</b>${p.ledger_axis}（${p.capex_or_budget}）</div>
+              <div><b>空間節點：</b>${p.target_node}（${p.surrounding_towns}）</div>
+            </div>
+            <p style="color:#334155; font-size:12px; margin:0;">${p.snippet}</p>
+          </div>
+        `)
+        .addTo(map);
+    }
+
+    map.on('load', async () => {
+      // === 1. 土地使用分區色彩分層基準（低飽和 43%～53% 2D 建物底圖） ===
+      map.addSource('buildings-2d', { type: 'geojson', data: '/data/buildings-landuse-2d.geojson' });
+
+      map.addLayer({
+        id: 'buildings-fill-layer',
+        type: 'fill',
+        source: 'buildings-2d',
+        minzoom: 9.5,
+        paint: {
+          'fill-color': [
+            'coalesce',
+            ['get', 'fill_hex'],
+            [
+              'match',
+              ['get', 'zone_category'],
+              '住宅區', '#FDE047',
+              '商業區', '#FCA5A5',
+              '住商混合區', '#FDBA74',
+              '工業/科技園區', '#D6B49C',
+              '文教/機關/公設', '#93C5FD',
+              '綠地/保育/農業', '#86EFAC',
+              '交通/水利用地', '#CBD5E1',
+              '#E2E8F0'
+            ]
+          ],
+          'fill-opacity': [
+            'match',
+            ['get', 'zone_category'],
+            '工業/科技園區', 0.53,
+            '商業區', 0.50,
+            '住商混合區', 0.50,
+            '文教/機關/公設', 0.50,
+            '住宅區', 0.45,
+            '交通/水利用地', 0.45,
+            '綠地/保育/農業', 0.43,
+            0.44
+          ]
+        }
+      });
+
+      map.addLayer({
+        id: 'buildings-outline-layer',
+        type: 'line',
+        source: 'buildings-2d',
+        minzoom: 13.5,
+        paint: { 'line-color': '#64748b', 'line-width': 0.5, 'line-opacity': 0.45 }
+      });
+
+      // === 2. 高壓輸電幹線與變電所 (345kV / 161kV / 69kV) ===
+      map.addSource('power-lines', { type: 'geojson', data: '/data/official-power-lines.geojson' });
+      map.addLayer({
+        id: 'power-lines-layer',
+        type: 'line',
+        source: 'power-lines',
+        filter: ['in', ['get', 'voltage_tier'], ['literal', ['345kV', '161kV']]],
+        paint: {
+          'line-color': ['match', ['get', 'voltage_tier'], '345kV', '#dc2626', '161kV', '#f59e0b', '#94a3b8'],
+          'line-width': ['match', ['get', 'voltage_tier'], '345kV', 2.2, 1.3],
+          'line-opacity': 0.72
+        }
+      });
+
+      map.addSource('power-substations', { type: 'geojson', data: '/data/official-power-substations.geojson' });
+      map.addLayer({
+        id: 'power-substations-layer',
+        type: 'circle',
+        source: 'power-substations',
+        minzoom: 8.5,
+        filter: ['in', ['get', 'voltage_tier'], ['literal', ['345kV', '161kV']]],
+        paint: {
+          'circle-color': ['match', ['get', 'voltage_tier'], '345kV', '#b91c1c', '#d97706'],
+          'circle-radius': ['match', ['get', 'voltage_tier'], '345kV', 5.5, 3.8],
+          'circle-stroke-width': 1.2,
+          'circle-stroke-color': '#ffffff'
+        }
+      });
+
+      // === 3. 再生能源設施（太陽能、風力、地熱） ===
+      map.addSource('solar-power', { type: 'geojson', data: '/data/official-solar-power.geojson' });
+      map.addSource('wind-power', { type: 'geojson', data: '/data/official-wind-power.geojson' });
+      map.addSource('geothermal-power', { type: 'geojson', data: '/data/official-geothermal-power.geojson' });
+
+      map.addLayer({
+        id: 'solar-layer',
+        type: 'circle',
+        source: 'solar-power',
+        paint: { 'circle-color': '#eab308', 'circle-radius': 4.5, 'circle-stroke-width': 1.2, 'circle-stroke-color': '#ffffff' }
+      });
+      map.addLayer({
+        id: 'wind-layer',
+        type: 'circle',
+        source: 'wind-power',
+        paint: { 'circle-color': '#16a34a', 'circle-radius': 5.5, 'circle-stroke-width': 1.5, 'circle-stroke-color': '#ffffff' }
+      });
+      map.addLayer({
+        id: 'geothermal-layer',
+        type: 'circle',
+        source: 'geothermal-power',
+        paint: { 'circle-color': '#ea580c', 'circle-radius': 6.5, 'circle-stroke-width': 1.5, 'circle-stroke-color': '#ffffff' }
+      });
+
+      // === 4. 國道與快速公路網 (official-highways.geojson) ===
+      map.addSource('highways', { type: 'geojson', data: '/data/official-highways.geojson' });
+      map.addLayer({
+        id: 'highways-layer',
+        type: 'line',
+        source: 'highways',
+        layout: { 'line-join': 'round', 'line-cap': 'round' },
+        paint: {
+          'line-color': ['match', ['get', 'category'], 'freeway', '#334155', '#64748b'],
+          'line-width': ['interpolate', ['linear'], ['zoom'], 6, 1.8, 12, 3.6],
+          'line-opacity': 0.78
+        }
+      });
+
+      // === 5. 臺鐵全線鐵路網 (official-rail.geojson) ===
+      map.addSource('tra-rail', { type: 'geojson', data: '/data/official-rail.geojson' });
+      map.addLayer({
+        id: 'tra-rail-layer',
+        type: 'line',
+        source: 'tra-rail',
+        layout: { 'visibility': 'none' },
+        paint: { 'line-color': '#475569', 'line-width': 1.5, 'line-dasharray': [2, 2], 'line-opacity': 0.75 }
+      });
+
+      // === 6. 台灣高鐵全線實測曲線＋12車站 (official-thsr-complete.geojson) ===
+      map.addSource('thsr', { type: 'geojson', data: '/data/official-thsr-complete.geojson' });
+      map.addLayer({
+        id: 'thsr-line-layer',
+        type: 'line',
+        source: 'thsr',
+        filter: ['==', ['get', 'feature_type'], 'route'],
+        layout: { 'line-join': 'round', 'line-cap': 'round' },
+        paint: {
+          'line-color': '#ea580c',
+          'line-width': ['interpolate', ['linear'], ['zoom'], 6, 3.2, 12, 5.5],
+          'line-opacity': 0.92
+        }
+      });
+      map.addLayer({
+        id: 'thsr-stations-layer',
+        type: 'circle',
+        source: 'thsr',
+        filter: ['==', ['get', 'feature_type'], 'station'],
+        paint: {
+          'circle-color': '#ffffff',
+          'circle-radius': ['interpolate', ['linear'], ['zoom'], 6, 4.5, 12, 7.5],
+          'circle-stroke-width': 2.5,
+          'circle-stroke-color': '#ea580c'
+        }
+      });
+
+      // === 7. 商港、工業專用港與漁港 (official-ports.geojson) ===
+      map.addSource('ports', { type: 'geojson', data: '/data/official-ports.geojson' });
+      map.addLayer({
+        id: 'ports-major-layer',
+        type: 'circle',
+        source: 'ports',
+        filter: ['in', ['get', 'category'], ['literal', ['commercial_port', 'industrial_port']]],
+        paint: {
+          'circle-color': ['match', ['get', 'category'], 'commercial_port', '#0284c7', '#7c3aed'],
+          'circle-radius': 6.5,
+          'circle-stroke-width': 2,
+          'circle-stroke-color': '#ffffff'
+        }
+      });
+      map.addLayer({
+        id: 'ports-fishing-layer',
+        type: 'circle',
+        source: 'ports',
+        filter: ['!', ['in', ['get', 'category'], ['literal', ['commercial_port', 'industrial_port']]]],
+        layout: { 'visibility': 'none' },
+        paint: { 'circle-color': '#38bdf8', 'circle-radius': 3.5, 'circle-opacity': 0.75 }
+      });
+
+      // === 8. 離島航空站 ＋ API 動態海空貨運走廊 ===
+      map.addSource('offshore-airports', { type: 'geojson', data: '/data/official-airports-offshore.geojson' });
+      map.addLayer({
+        id: 'offshore-airports-layer',
+        type: 'circle',
+        source: 'offshore-airports',
+        paint: { 'circle-color': '#0ea5e9', 'circle-radius': 5.5, 'circle-stroke-width': 1.8, 'circle-stroke-color': '#ffffff' }
+      });
+
+      try {
+        const infraRes = await fetch('/api/infra-dynamic');
+        if (infraRes.ok) {
+          const infraPayload = await infraRes.json();
+          document.getElementById('api-status-box').innerHTML = '🟢 自動化交通・電力・海空運 API 已連線';
+          const m = infraPayload.metrics;
+          if (m) {
+            document.getElementById('m-renew').textContent = `${m.power_and_energy.total_renewable_mw} MW`;
+            document.getElementById('m-subs').textContent = `${m.power_and_energy.substations_total} 座`;
+            document.getElementById('m-ports').textContent = `${m.transport.commercial_ports + m.transport.industrial_ports} 處主要港`;
+          }
+          map.addSource('air-sea-corridors', { type: 'geojson', data: infraPayload.air_and_maritime_corridors });
+          map.addLayer({
+            id: 'air-sea-lines-layer',
+            type: 'line',
+            source: 'air-sea-corridors',
+            filter: ['==', ['geometry-type'], 'LineString'],
+            paint: {
+              'line-color': ['match', ['get', 'category'], 'air_freight_line', '#0284c7', '#0d9488'],
+              'line-width': 3,
+              'line-dasharray': [2, 1.5],
+              'line-opacity': 0.9
+            }
+          });
+          map.addLayer({
+            id: 'main-air-hubs-layer',
+            type: 'circle',
+            source: 'air-sea-corridors',
+            filter: ['==', ['geometry-type'], 'Point'],
+            paint: {
+              'circle-color': '#0369a1',
+              'circle-radius': 7,
+              'circle-stroke-width': 2,
+              'circle-stroke-color': '#ffffff'
+            }
+          });
+        }
+      } catch (e) {
+        document.getElementById('api-status-box').innerHTML = '🟡 本地離線模式：已載入全臺實測圖資';
+      }
+
+      // === 9. 多源語意情報與「Every Note 全註記分層顯隱」系統 ===
+      try {
+        const liveRes = await fetch('/api/osint-live');
+        if (liveRes.ok) {
+          allOsintData = await liveRes.json();
+        } else {
+          const staticRes = await fetch('/data/osint-intelligence.geojson');
+          allOsintData = await staticRes.json();
+        }
+      } catch (e) {
+        const staticRes = await fetch('/data/osint-intelligence.geojson');
+        allOsintData = await staticRes.json();
+      }
+
+      map.addSource('osint-events', { type: 'geojson', data: allOsintData });
+      renderNoteList(allOsintData.features || []);
+
+      map.addLayer({
+        id: 'osint-heatmap-layer',
+        type: 'heatmap',
+        source: 'osint-events',
+        maxzoom: 11.5,
+        paint: {
+          'heatmap-weight': ['coalesce', ['get', 'heat_weight'], 1],
+          'heatmap-intensity': ['interpolate', ['linear'], ['zoom'], 6, 0.65, 11, 1.3],
+          'heatmap-radius': ['interpolate', ['linear'], ['zoom'], 6, 22, 11, 36],
+          'heatmap-opacity': 0.55
+        }
+      });
+
+      map.addLayer({
+        id: 'osint-pins-layer',
+        type: 'circle',
+        source: 'osint-events',
+        paint: {
+          'circle-color': ['coalesce', ['get', 'marker_hex'], '#ef4444'],
+          'circle-radius': ['interpolate', ['linear'], ['zoom'], 6, 6.5, 13, 9],
+          'circle-stroke-width': 2.2,
+          'circle-stroke-color': '#ffffff'
+        }
+      });
+
+      map.addLayer({
+        id: 'osint-notes-label-layer',
+        type: 'symbol',
+        source: 'osint-events',
+        layout: {
+          'text-field': [
+            'step',
+            ['zoom'],
+            ['coalesce', ['get', 'short_note'], ['get', 'title']],
+            12,
+            ['concat', ['get', 'target_node'], '\n', ['get', 'title']]
+          ],
+          'text-size': ['interpolate', ['linear'], ['zoom'], 6, 11.5, 13, 13],
+          'text-anchor': 'left',
+          'text-offset': [0.9, 0],
+          'text-max-width': 18,
+          'text-allow-overlap': true
+        },
+        paint: {
+          'text-color': '#0f172a',
+          'text-halo-color': 'rgba(255, 255, 255, 0.95)',
+          'text-halo-width': 2.2
+        }
+      });
+
+      // === 圖層開關與動態縮放狀態列 ===
+      map.on('zoom', () => {
+        const z = map.getZoom().toFixed(1);
+        const label = z < 9.5 ? '全島戰略視角：高鐵國道電網 ＋ Every Note 註記總覽'
+                    : z < 13.5 ? '區域走廊視角：低飽和都計分區（45%）＋ 變電所與海空走廊'
+                    : '街區微觀視角：單棟建物使用分區 ＋ 完整情報註記';
+        document.getElementById('zoom-mode').textContent = `Zoom ${z}｜${label}`;
+      });
+
+      const bindToggle = (id, layerIds) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.addEventListener('change', (e) => {
+          const vis = e.target.checked ? 'visible' : 'none';
+          layerIds.forEach(lid => { if (map.getLayer(lid)) map.setLayoutProperty(lid, 'visibility', vis); });
+        });
+      };
+
+      bindToggle('toggle-buildings', ['buildings-fill-layer', 'buildings-outline-layer']);
+      bindToggle('toggle-thsr', ['thsr-line-layer', 'thsr-stations-layer']);
+      bindToggle('toggle-highways', ['highways-layer']);
+      bindToggle('toggle-tra', ['tra-rail-layer']);
+      bindToggle('toggle-ports', ['ports-major-layer']);
+      bindToggle('toggle-fishing-ports', ['ports-fishing-layer']);
+      bindToggle('toggle-air-sea-corridors', ['air-sea-lines-layer', 'main-air-hubs-layer', 'offshore-airports-layer']);
+      bindToggle('toggle-power-grid', ['power-lines-layer', 'power-substations-layer']);
+      bindToggle('toggle-renewables', ['solar-layer', 'wind-layer', 'geothermal-layer']);
+      bindToggle('toggle-all-notes', ['osint-notes-label-layer']);
+      bindToggle('toggle-heatmap', ['osint-heatmap-layer']);
+
+      function updateOsintFilters() {
+        const checkedTopics = Array.from(document.querySelectorAll('.osint-filter:checked')).map(el => el.value);
+        const srcVal = document.getElementById('source-filter').value;
+        const filters = ['all', ['in', ['get', 'topic_category'], ['literal', checkedTopics]]];
+        if (srcVal !== 'ALL') filters.push(['==', ['get', 'source_type'], srcVal]);
+
+        ['osint-heatmap-layer', 'osint-pins-layer', 'osint-notes-label-layer'].forEach(lid => {
+          if (map.getLayer(lid)) map.setFilter(lid, filters);
+        });
+
+        const filteredList = (allOsintData.features || []).filter(f => {
+          const p = f.properties || {};
+          return checkedTopics.includes(p.topic_category) && (srcVal === 'ALL' || p.source_type === srcVal);
+        });
+        renderNoteList(filteredList);
+      }
+
+      document.querySelectorAll('.osint-filter').forEach(cb => cb.addEventListener('change', updateOsintFilters));
+      document.getElementById('source-filter').addEventListener('change', updateOsintFilters);
+
+      // 點擊事件：情報註記 / 交通 / 港口 / 變電所 / 再生能源 / 2D 建物分區
+      ['osint-pins-layer', 'osint-notes-label-layer'].forEach(lid => {
+        map.on('click', lid, (e) => showOsintPopup(e.features[0].geometry.coordinates, e.features[0].properties));
+        map.on('mouseenter', lid, () => map.getCanvas().style.cursor = 'pointer');
+        map.on('mouseleave', lid, () => map.getCanvas().style.cursor = '');
+      });
+
+      const genericPopupLayers = [
+        'thsr-stations-layer', 'ports-major-layer', 'ports-fishing-layer',
+        'power-substations-layer', 'solar-layer', 'wind-layer', 'geothermal-layer',
+        'main-air-hubs-layer', 'offshore-airports-layer', 'air-sea-lines-layer'
+      ];
+      genericPopupLayers.forEach(lid => {
+        map.on('click', lid, (e) => {
+          const p = e.features[0].properties;
+          const title = p.name || p.station_name || p.road_num || '基礎設施節點';
+          const sub = p.voltage_label || p.energy_label || p.category || p.type || '';
+          const detail = p.status || p.address || p.cargo || (p.capacity_mw ? `裝置容量：${p.capacity_mw} MW` : '');
+          new maplibregl.Popup({ maxWidth: '280px' })
+            .setLngLat(e.lngLat)
+            .setHTML(`
+              <div style="font-size:13px; line-height:1.55;">
+                ${sub ? `<span style="background:#0284c7; color:#fff; padding:2px 6px; border-radius:4px; font-size:11px;">${sub}</span>` : ''}
+                <div style="font-weight:700; margin-top:4px;">${title}</div>
+                ${p.operator ? `<div><b>營運單位：</b>${p.operator}</div>` : ''}
+                ${p.capacity_mw ? `<div><b>裝置容量：</b>${p.capacity_mw} MW</div>` : ''}
+                ${detail ? `<div style="color:#475569; font-size:12px; margin-top:2px;">${detail}</div>` : ''}
+              </div>
+            `)
+            .addTo(map);
+        });
+        map.on('mouseenter', lid, () => map.getCanvas().style.cursor = 'pointer');
+        map.on('mouseleave', lid, () => map.getCanvas().style.cursor = '');
+      });
+
+      map.on('click', 'buildings-fill-layer', (e) => {
+        const p = e.features[0].properties;
+        new maplibregl.Popup({ maxWidth: '280px' })
+          .setLngLat(e.lngLat)
+          .setHTML(`
+            <div style="font-size:13px; line-height:1.6;">
+              <div style="font-weight:700; border-bottom:1px solid #e2e8f0; padding-bottom:4px; margin-bottom:4px;">
+                ${p.name || '未命名建築物'}
+              </div>
+              <div><b>使用分區：</b>${p.zone_category}（${p.zone_raw}）</div>
+              <div><b>戰略節點：</b>${p.important_node} [${p.node_type}]</div>
+              ${p.surrounding_towns ? `<div><b>周邊城鎮：</b>${p.surrounding_towns}</div>` : ''}
+            </div>
+          `)
+          .addTo(map);
+      });
+    });
+  </script>
+</body>
+</html>
